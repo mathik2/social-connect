@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flask WebRTC Voice Call</title>
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+</head>
+<body>
+  <h2>Voice Call Demo (Flask + WebRTC)</h2>
+  <button id="callBtn">Start Call</button>
+  <button id="answerBtn">Answer Call</button>
+  <button id="hangupBtn">Hang Up</button>
+
+  <div>
+    <h3>Remote Audio:</h3>
+    <audio id="remoteAudio" autoplay></audio>
+  </div>
+
+  <script>
+    const socket = io(); // connect to Flask backend
+    let pc; // peer connection
+    let localStream;
+
+    // Configuration with free Google STUN server
+    const config = {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
+
+    async function initPeerConnection() {
+      pc = new RTCPeerConnection(config);
+
+      // Add local mic stream
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      // Play remote audio
+      pc.ontrack = (event) => {
+        document.getElementById("remoteAudio").srcObject = event.streams[0];
+      };
+
+      // Send ICE candidates to signaling server
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("ice-candidate", event.candidate);
+        }
+      };
+    }
+
+    // Caller creates offer
+    document.getElementById("callBtn").onclick = async () => {
+      await initPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("offer", offer);
+    };
+
+    // Receiver answers offer
+    document.getElementById("answerBtn").onclick = async () => {
+      await initPeerConnection();
+    };
+
+    // Handle incoming offer
+    socket.on("offer", async (offer) => {
+      if (!pc) await initPeerConnection();
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit("answer", answer);
+    });
+
+    // Handle incoming answer
+    socket.on("answer", async (answer) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    // Handle incoming ICE candidate
+    socket.on("ice-candidate", async (candidate) => {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error("Error adding received ICE candidate", e);
+      }
+    });
+
+    document.getElementById("hangupBtn").onclick = () => {
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  socket.emit("hangup");
+};
+
+socket.on("hangup", () => {
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  document.getElementById("remoteAudio").srcObject = null;
+});
+
+
+  </script>
+</body>
+</html>
